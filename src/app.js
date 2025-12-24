@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import { config } from "./config/env.js";
+import { supabaseStatus } from "./config/supabase.js";
 import { errorHandler, notFound } from "./middleware/errorHandler.js";
 
 // Import routes
@@ -16,9 +17,24 @@ import uploadRoutes from "./routes/upload.routes.js";
 const app = express();
 
 // Middleware
+// Allow multiple origins for development
+const allowedOrigins = [
+  config.clientUrl,
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5175",
+];
+
 app.use(
   cors({
-    origin: config.clientUrl,
+    origin: function (origin, callback) {
+      // Allow requests with no origin (like mobile apps or curl requests)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(null, false);
+    },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
@@ -62,6 +78,7 @@ app.listen(PORT, () => {
   Environment: ${config.nodeEnv}
   Port: ${PORT}
   Client URL: ${config.clientUrl}
+  Supabase: ${supabaseStatus.message}
   
   API Endpoints:
   - Health: http://localhost:${PORT}/api/health
