@@ -6,4 +6,7 @@ const router = express.Router();
 // Public search route
 router.get("/", searchController.search);
 
+// Autocomplete suggestions
+router.get("/suggestions", searchController.suggestions);
+
 export default router;
