@@ -1,7 +1,8 @@
 import { supabaseAdmin } from "../config/supabase.js";
+import cacheUtil from "../utils/cache.js";
 
 /**
- * Get all tracks with pagination
+ * Get all tracks with pagination and caching
  */
 export const getAllTracks = async (req, res, next) => {
   try {
@@ -13,29 +14,40 @@ export const getAllTracks = async (req, res, next) => {
     } = req.query;
     const offset = (page - 1) * limit;
 
-    const {
-      data: tracks,
-      error,
-      count,
-    } = await supabaseAdmin
-      .from("tracks")
-      .select("*", { count: "exact" })
-      .order(sort, { ascending: order === "asc" })
-      .range(offset, offset + limit - 1);
+    // Create cache key based on query params
+    const cacheKey = `${cacheUtil.CACHE_KEYS.TRACKS_LIST}:${page}:${limit}:${sort}:${order}`;
 
-    if (error) throw error;
+    const result = await cacheUtil.getOrSet(
+      cacheKey,
+      async () => {
+        const {
+          data: tracks,
+          error,
+          count,
+        } = await supabaseAdmin
+          .from("tracks")
+          .select("*", { count: "exact" })
+          .order(sort, { ascending: order === "asc" })
+          .range(offset, offset + limit - 1);
+
+        if (error) throw error;
+
+        return {
+          tracks,
+          pagination: {
+            page: parseInt(page),
+            limit: parseInt(limit),
+            total: count,
+            pages: Math.ceil(count / limit),
+          },
+        };
+      },
+      cacheUtil.TTL.TRACKS_LIST
+    );
 
     res.json({
       success: true,
-      data: {
-        tracks,
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total: count,
-          pages: Math.ceil(count / limit),
-        },
-      },
+      data: result,
     });
   } catch (error) {
     next(error);
@@ -43,19 +55,24 @@ export const getAllTracks = async (req, res, next) => {
 };
 
 /**
- * Get unique genres
+ * Get unique genres with caching
  */
 export const getGenres = async (req, res, next) => {
   try {
-    const { data, error } = await supabaseAdmin
-      .from("tracks")
-      .select("genre")
-      .not("genre", "is", null);
+    const genres = await cacheUtil.getOrSet(
+      cacheUtil.CACHE_KEYS.GENRES,
+      async () => {
+        const { data, error } = await supabaseAdmin
+          .from("tracks")
+          .select("genre")
+          .not("genre", "is", null);
 
-    if (error) throw error;
+        if (error) throw error;
 
-    // Extract unique genres
-    const genres = [...new Set(data.map((item) => item.genre).filter(Boolean))];
+        return [...new Set(data.map((item) => item.genre).filter(Boolean))];
+      },
+      cacheUtil.TTL.GENRES
+    );
 
     res.json({
       success: true,
@@ -75,30 +92,40 @@ export const getTracksByGenre = async (req, res, next) => {
     const { page = 1, limit = 20 } = req.query;
     const offset = (page - 1) * limit;
 
-    const {
-      data: tracks,
-      error,
-      count,
-    } = await supabaseAdmin
-      .from("tracks")
-      .select("*", { count: "exact" })
-      .eq("genre", genre)
-      .order("created_at", { ascending: false })
-      .range(offset, offset + limit - 1);
+    const cacheKey = `${cacheUtil.CACHE_KEYS.TRACKS_LIST}:genre:${genre}:${page}:${limit}`;
 
-    if (error) throw error;
+    const result = await cacheUtil.getOrSet(
+      cacheKey,
+      async () => {
+        const {
+          data: tracks,
+          error,
+          count,
+        } = await supabaseAdmin
+          .from("tracks")
+          .select("*", { count: "exact" })
+          .eq("genre", genre)
+          .order("created_at", { ascending: false })
+          .range(offset, offset + limit - 1);
+
+        if (error) throw error;
+
+        return {
+          tracks,
+          pagination: {
+            page: parseInt(page),
+            limit: parseInt(limit),
+            total: count,
+            pages: Math.ceil(count / limit),
+          },
+        };
+      },
+      cacheUtil.TTL.TRACKS_LIST
+    );
 
     res.json({
       success: true,
-      data: {
-        tracks,
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total: count,
-          pages: Math.ceil(count / limit),
-        },
-      },
+      data: result,
     });
   } catch (error) {
     next(error);
@@ -106,19 +133,28 @@ export const getTracksByGenre = async (req, res, next) => {
 };
 
 /**
- * Get single track by ID
+ * Get single track by ID with caching
  */
 export const getTrackById = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const { data: track, error } = await supabaseAdmin
-      .from("tracks")
-      .select("*")
-      .eq("id", id)
-      .single();
+    const track = await cacheUtil.getOrSet(
+      `${cacheUtil.CACHE_KEYS.TRACK_SINGLE}${id}`,
+      async () => {
+        const { data, error } = await supabaseAdmin
+          .from("tracks")
+          .select("*")
+          .eq("id", id)
+          .single();
 
-    if (error || !track) {
+        if (error || !data) return null;
+        return data;
+      },
+      cacheUtil.TTL.TRACK_SINGLE
+    );
+
+    if (!track) {
       return res.status(404).json({
         success: false,
         message: "Track not found.",
@@ -165,6 +201,9 @@ export const createTrack = async (req, res, next) => {
 
     if (error) throw error;
 
+    // Invalidate tracks cache
+    cacheUtil.invalidate("tracks");
+
     res.status(201).json({
       success: true,
       message: "Track created successfully.",
@@ -202,6 +241,10 @@ export const updateTrack = async (req, res, next) => {
 
     if (error) throw error;
 
+    // Invalidate caches
+    cacheUtil.invalidate("tracks");
+    cacheUtil.del(`${cacheUtil.CACHE_KEYS.TRACK_SINGLE}${id}`);
+
     res.json({
       success: true,
       message: "Track updated successfully.",
@@ -222,6 +265,10 @@ export const deleteTrack = async (req, res, next) => {
     const { error } = await supabaseAdmin.from("tracks").delete().eq("id", id);
 
     if (error) throw error;
+
+    // Invalidate caches
+    cacheUtil.invalidate("tracks");
+    cacheUtil.del(`${cacheUtil.CACHE_KEYS.TRACK_SINGLE}${id}`);
 
     res.json({
       success: true,

@@ -16,4 +16,7 @@ export const config = {
 
   // CORS
   clientUrl: process.env.CLIENT_URL || "http://localhost:5173",
+
+  // Error Monitoring
+  sentryDsn: process.env.SENTRY_DSN || null,
 };
